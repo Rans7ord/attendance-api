@@ -2,6 +2,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Attendance;
+use App\Models\AttendanceAttempt;
 use Illuminate\Http\Request;
 
 class AttendanceController extends Controller
@@ -11,20 +12,15 @@ class AttendanceController extends Controller
         $request->validate(['gps_lat' => 'required|numeric', 'gps_lng' => 'required|numeric']);
 
         $member = $request->user()->member;
-        $branch = $member->branch;
+        $check = $this->checkGeofence($member, $request->gps_lat, $request->gps_lng);
 
-        if ($branch) {
-            $distance = $this->distanceInMeters(
-                $request->gps_lat, $request->gps_lng,
-                $branch->gps_lat, $branch->gps_lng
-            );
+        $this->logAttempt($member, 'clock_in', $check, $request->gps_lat, $request->gps_lng);
 
-            if ($distance > $branch->geofence_radius_m) {
-                return response()->json([
-                    'message' => 'You are outside the allowed clock-in area.',
-                    'distance_m' => round($distance),
-                ], 422);
-            }
+        if (!$check['allowed']) {
+            return response()->json([
+                'message' => 'You are outside the allowed clock-in area.',
+                'distance_m' => $check['distance'],
+            ], 422);
         }
 
         $attendance = Attendance::create([
@@ -42,7 +38,19 @@ class AttendanceController extends Controller
     {
         $request->validate(['gps_lat' => 'required|numeric', 'gps_lng' => 'required|numeric']);
 
-        $attendance = Attendance::where('member_id', $request->user()->member->id)
+        $member = $request->user()->member;
+        $check = $this->checkGeofence($member, $request->gps_lat, $request->gps_lng);
+
+        $this->logAttempt($member, 'clock_out', $check, $request->gps_lat, $request->gps_lng);
+
+        if (!$check['allowed']) {
+            return response()->json([
+                'message' => 'You are outside the allowed clock-out area.',
+                'distance_m' => $check['distance'],
+            ], 422);
+        }
+
+        $attendance = Attendance::where('member_id', $member->id)
             ->whereNull('clock_out')
             ->latest()
             ->firstOrFail();
@@ -66,6 +74,34 @@ class AttendanceController extends Controller
             ->get();
 
         return response()->json($records);
+    }
+
+    private function checkGeofence($member, $lat, $lng): array
+    {
+        $branch = $member->branch;
+
+        if (!$branch) {
+            return ['allowed' => true, 'distance' => null];
+        }
+
+        $distance = $this->distanceInMeters($lat, $lng, $branch->gps_lat, $branch->gps_lng);
+
+        return [
+            'allowed' => $distance <= $branch->geofence_radius_m,
+            'distance' => round($distance),
+        ];
+    }
+
+    private function logAttempt($member, string $type, array $check, $lat, $lng): void
+    {
+        AttendanceAttempt::create([
+            'member_id' => $member->id,
+            'type' => $type,
+            'result' => $check['allowed'] ? 'success' : 'rejected',
+            'gps_lat' => $lat,
+            'gps_lng' => $lng,
+            'distance_m' => $check['distance'],
+        ]);
     }
 
     private function distanceInMeters($lat1, $lng1, $lat2, $lng2)

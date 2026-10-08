@@ -1,12 +1,16 @@
 <?php
 namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Concerns\BelongsToCompany;
 
 class Attendance extends Model
 {
+    use BelongsToCompany;
+
     protected $table = 'attendance';
 
     protected $fillable = [
+        'company_id',
         'member_id',
         'shift_id',
         'device_id',
@@ -23,6 +27,14 @@ class Attendance extends Model
         'status',
         'remarks',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'clock_in' => 'datetime',
+            'clock_out' => 'datetime',
+        ];
+    }
 
     public function member() { return $this->belongsTo(Member::class); }
 }

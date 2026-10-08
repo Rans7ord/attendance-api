@@ -6,8 +6,12 @@ use Illuminate\Http\Request;
 
 class BranchesController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        if ($request->user()->isSupervisor()) {
+            return Branch::where('id', $request->user()->branchId())->get();
+        }
+
         return Branch::all();
     }
 
@@ -36,10 +40,11 @@ class BranchesController extends Controller
             'gps_lat' => 'sometimes|numeric',
             'gps_lng' => 'sometimes|numeric',
             'geofence_radius_m' => 'sometimes|integer|min:10',
+            'use_shifts' => 'sometimes|boolean',
         ]);
 
         $branch->update($request->only([
-            'name', 'address', 'gps_lat', 'gps_lng', 'geofence_radius_m',
+            'name', 'address', 'gps_lat', 'gps_lng', 'geofence_radius_m', 'use_shifts',
         ]));
 
         return response()->json($branch);

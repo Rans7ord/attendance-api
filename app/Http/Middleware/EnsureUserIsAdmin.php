@@ -10,7 +10,7 @@ class EnsureUserIsAdmin
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if ($request->user()?->role !== 'admin') {
+        if (!in_array($request->user()?->role, ['admin', 'super_admin'], true)) {
             return response()->json(['message' => 'Forbidden — admin access required.'], 403);
         }
 

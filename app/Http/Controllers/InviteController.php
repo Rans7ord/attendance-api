@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 
 class InviteController extends Controller
 {
-    private const ROLES = ['member', 'supervisor', 'admin'];
+    private const ROLES = ['member', 'supervisor', 'manager', 'admin'];
 
     /**
      * Admin-only: create a one-time invite for a specific email address.
@@ -31,9 +31,10 @@ class InviteController extends Controller
         $role = $request->input('role', 'member');
 
         // Supervisors and members are tied to one branch, so they need
-        // somewhere to belong. Admins oversee the whole company and
-        // aren't required to have one.
-        if ($role !== 'admin' && !$request->filled('branch_id')) {
+        // somewhere to belong. Admins and managers oversee the whole
+        // company and aren't required to have one (they can be given a
+        // home branch later if they also need to clock in).
+        if (in_array($role, ['member', 'supervisor'], true) && !$request->filled('branch_id')) {
             return response()->json([
                 'message' => 'A branch is required when inviting a member or supervisor.',
             ], 422);

@@ -147,8 +147,13 @@ class CompanyController extends Controller
     public function regenerateJoinCode(Request $request)
     {
         $request->validate([
+            // Rotating the code makes the old one stop working at once, so
+            // the app has to ask the admin first and send confirm=true.
+            'confirm' => 'accepted',
             'expires_in_days' => 'nullable|integer|min:1|max:365',
             'max_uses' => 'nullable|integer|min:1',
+        ], [
+            'confirm.accepted' => 'Confirmation required: send confirm=true to replace the current join code.',
         ]);
 
         $company = $request->user()->company;

@@ -55,6 +55,15 @@ class User extends Authenticatable
     }
 
     /**
+     * True for manager — sees every branch and can approve leave, but
+     * cannot create, edit or delete anything (admin-only).
+     */
+    public function isManager(): bool
+    {
+        return $this->role === 'manager';
+    }
+
+    /**
      * True for supervisor — branch-scoped access.
      */
     public function isSupervisor(): bool

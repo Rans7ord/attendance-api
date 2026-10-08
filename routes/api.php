@@ -13,6 +13,7 @@ use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\MemberRegistrationController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\ReportsController;
+use App\Http\Controllers\DayOffController;
 use App\Http\Controllers\PinLoginController;
 
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
@@ -37,6 +38,8 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
     Route::get('/leave', [LeaveController::class, 'mine']);
     Route::post('/leave', [LeaveController::class, 'store']);
     Route::post('/leave/{leaveRequest}/cancel', [LeaveController::class, 'cancel']);
+
+    Route::get('/days-off/mine', [DayOffController::class, 'mine']);
 
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
@@ -80,7 +83,21 @@ Route::middleware(['auth:sanctum', 'active', 'admin'])->group(function () {
     Route::post('/invites', [InviteController::class, 'store']);
     Route::delete('/invites/{invite}', [InviteController::class, 'destroy']);
 
+    Route::put('/members/{member}/role', [MembersController::class, 'updateRole']);
+    Route::post('/members/{member}/deactivate', [MembersController::class, 'deactivate']);
+    Route::post('/members/{member}/reactivate', [MembersController::class, 'reactivate']);
+    Route::delete('/members/{member}', [MembersController::class, 'destroy']);
+});
+
+Route::middleware(['auth:sanctum', 'active', 'manager'])->group(function () {
     Route::get('/reports/summary', [ReportsController::class, 'summary']);
     Route::get('/reports/export', [ReportsController::class, 'exportCsv']);
     Route::get('/reports/members/{member}', [ReportsController::class, 'memberDetail']);
+
+    // Optional holidays / short breaks / one-off closures. Managers manage
+    // these too (it is their scheduling job), unlike branches and settings.
+    Route::get('/days-off', [DayOffController::class, 'index']);
+    Route::post('/days-off', [DayOffController::class, 'store']);
+    Route::put('/days-off/{dayOff}', [DayOffController::class, 'update']);
+    Route::delete('/days-off/{dayOff}', [DayOffController::class, 'destroy']);
 });

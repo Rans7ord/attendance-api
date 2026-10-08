@@ -3,12 +3,46 @@ namespace App\Http\Controllers;
 
 use App\Models\Attendance;
 use App\Models\AttendanceAttempt;
+use App\Models\DayOff;
+use App\Models\LeaveRequest;
 use App\Models\Member;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 
 class AttendanceController extends Controller
 {
+    /** Approved full-day leave covering this date? (Half-day leave still allows clocking in.) */
+    private function onFullDayLeave(int $memberId, string $date): bool
+    {
+        return LeaveRequest::where('member_id', $memberId)
+            ->where('status', 'approved')
+            ->where('type', 'full_day')
+            ->where('start_date', '<=', $date)
+            ->where('end_date', '>=', $date)
+            ->exists();
+    }
+
+    /** date (Y-m-d) => true for every day in the range covered by approved leave. */
+    private function leaveDatesFor(int $memberId, Carbon $from, Carbon $to): array
+    {
+        $leaves = LeaveRequest::where('member_id', $memberId)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $to->toDateString())
+            ->where('end_date', '>=', $from->toDateString())
+            ->get();
+
+        $dates = [];
+        foreach ($leaves as $leave) {
+            $start = Carbon::parse(max($leave->start_date->toDateString(), $from->toDateString()));
+            $end = Carbon::parse(min($leave->end_date->toDateString(), $to->toDateString()));
+            for ($d = $start->copy(); $d->lte($end); $d->addDay()) {
+                $dates[$d->toDateString()] = true;
+            }
+        }
+
+        return $dates;
+    }
+
     private function noMemberResponse()
     {
         return response()->json([
@@ -41,6 +75,24 @@ class AttendanceController extends Controller
             $this->logAttempt($member, 'clock_in', 'rejected', 'no_branch', null, $request->gps_lat, $request->gps_lng);
             return response()->json([
                 'message' => 'You are not assigned to a branch yet. Ask an admin to assign you one before clocking in.',
+            ], 422);
+        }
+
+        // A holiday / break / closure set for this person, or their own
+        // approved full-day leave, means there is nothing to clock in to.
+        $today = now()->toDateString();
+
+        if ($dayOff = DayOff::forMemberOn($member, $today)) {
+            $this->logAttempt($member, 'clock_in', 'rejected', 'day_off', null, $request->gps_lat, $request->gps_lng);
+            return response()->json([
+                'message' => "Today is a day off ({$dayOff->title}), so clock-in is closed.",
+            ], 422);
+        }
+
+        if ($this->onFullDayLeave($member->id, $today)) {
+            $this->logAttempt($member, 'clock_in', 'rejected', 'on_leave', null, $request->gps_lat, $request->gps_lng);
+            return response()->json([
+                'message' => 'You are on approved leave today, so you cannot clock in. If that is wrong, speak to your manager.',
             ], 422);
         }
 
@@ -180,8 +232,19 @@ class AttendanceController extends Controller
         $members = $query->get();
         $dayName = strtolower(now()->format('l'));
         $today = now()->toDateString();
+        $todayStart = now()->startOfDay();
 
-        $results = $members->map(function ($member) use ($dayName, $today) {
+        $dayOffs = DayOff::loadFor($todayStart, $todayStart);
+        $onLeaveIds = array_flip(
+            LeaveRequest::whereIn('member_id', $members->pluck('id'))
+                ->where('status', 'approved')
+                ->where('start_date', '<=', $today)
+                ->where('end_date', '>=', $today)
+                ->pluck('member_id')
+                ->all()
+        );
+
+        $results = $members->map(function ($member) use ($dayName, $today, $todayStart, $dayOffs, $onLeaveIds) {
             $branch = $member->branch;
             $scheduleRow = $branch?->scheduleDays->firstWhere('day', $dayName);
             $shift = ($branch?->use_shifts && $member->shift_id) ? $member->shift : null;
@@ -191,7 +254,12 @@ class AttendanceController extends Controller
                 ->latest()
                 ->first();
 
-            $status = $this->dayStatus($scheduleRow, $attendance, $today, true, false, $shift);
+            $offTitle = DayOff::expand($dayOffs, $member, $todayStart, $todayStart)[$today] ?? null;
+
+            $status = $this->dayStatus(
+                $scheduleRow, $attendance, $today, true, false, $shift,
+                $offTitle !== null, isset($onLeaveIds[$member->id])
+            );
 
             return [
                 'member_id' => $member->id,
@@ -202,6 +270,7 @@ class AttendanceController extends Controller
                 'branch_name' => $branch?->name,
                 'shift_name' => $shift?->name,
                 'status' => $status,
+                'note' => $status === 'day_off' ? $offTitle : null,
                 'clock_in' => $attendance?->clock_in,
                 'clock_out' => $attendance?->clock_out,
             ];
@@ -257,6 +326,9 @@ class AttendanceController extends Controller
             ->get()
             ->keyBy(fn ($a) => $a->clock_in->toDateString());
 
+        $offDates = DayOff::expand(DayOff::loadFor($start, $end), $member, $start, $end);
+        $leaveDates = $this->leaveDatesFor($member->id, $start, $end);
+
         $joinedDate = $member->created_at->toDateString();
         $today = now()->toDateString();
         $days = [];
@@ -265,7 +337,7 @@ class AttendanceController extends Controller
             $dateString = $date->toDateString();
 
             if ($dateString < $joinedDate) {
-                $days[] = ['date' => $dateString, 'status' => 'not_joined', 'clock_in' => null, 'clock_out' => null];
+                $days[] = ['date' => $dateString, 'status' => 'not_joined', 'note' => null, 'clock_in' => null, 'clock_out' => null];
                 continue;
             }
 
@@ -276,9 +348,15 @@ class AttendanceController extends Controller
             $isToday = $dateString === $today;
             $isFutureDay = $dateString > $today;
 
+            $status = $this->dayStatus(
+                $scheduleRow, $attendance, $dateString, $isToday, $isFutureDay, $shift,
+                isset($offDates[$dateString]), isset($leaveDates[$dateString])
+            );
+
             $days[] = [
                 'date' => $dateString,
-                'status' => $this->dayStatus($scheduleRow, $attendance, $dateString, $isToday, $isFutureDay, $shift),
+                'status' => $status,
+                'note' => $status === 'day_off' ? ($offDates[$dateString] ?? null) : null,
                 'clock_in' => $attendance?->clock_in,
                 'clock_out' => $attendance?->clock_out,
             ];
@@ -361,10 +439,21 @@ class AttendanceController extends Controller
         return $clockOutAt->lt($cutoff);
     }
 
-    private function dayStatus($scheduleRow, ?Attendance $attendance, string $dateString, bool $isToday, bool $isFutureDay, $shift = null): string
+    /**
+     * Order matters: a clock-in record always wins, a closed weekday beats
+     * everything else, then a day off, then approved leave, and only then
+     * does a working day with nothing on it become absent.
+     */
+    private function dayStatus($scheduleRow, ?Attendance $attendance, string $dateString, bool $isToday, bool $isFutureDay, $shift = null, bool $isDayOff = false, bool $onLeave = false): string
     {
         if (!$scheduleRow) {
             if (!$attendance) {
+                if ($isDayOff) {
+                    return 'day_off';
+                }
+                if ($onLeave) {
+                    return 'leave';
+                }
                 return 'unscheduled';
             }
             return $attendance->clock_out ? $attendance->status : ($isToday ? 'open' : 'incomplete');
@@ -376,6 +465,14 @@ class AttendanceController extends Controller
 
         if ($attendance) {
             return $attendance->clock_out ? $attendance->status : ($isToday ? 'open' : 'incomplete');
+        }
+
+        if ($isDayOff) {
+            return 'day_off';
+        }
+
+        if ($onLeave) {
+            return 'leave';
         }
 
         if ($isFutureDay) {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Attendance;
 use App\Models\Branch;
+use App\Models\DayOff;
 use App\Models\LeaveRequest;
 use App\Models\Member;
 use Carbon\Carbon;
@@ -28,6 +29,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *   - has an attendance record  -> its status (present / late / half_day);
  *                                  the first record of the day decides
  *   - branch is closed that day -> closed (not counted)
+ *   - a day off applies to them -> day_off (not counted as absent)
  *   - approved leave covers it  -> leave
  *   - no schedule for that day  -> unscheduled (not counted)
  *   - working day, nothing else -> absent (today only once the clock-in
@@ -37,7 +39,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 class ReportsController extends Controller
 {
     private const MAX_RANGE_DAYS = 366;
-    private const COUNT_KEYS = ['present', 'late', 'half_day', 'absent', 'leave', 'incomplete'];
+    private const COUNT_KEYS = ['present', 'late', 'half_day', 'absent', 'leave', 'day_off', 'incomplete'];
 
     public function summary(Request $request)
     {
@@ -104,25 +106,25 @@ class ReportsController extends Controller
 
         return $this->streamCsv($filename, function ($out) use ($group, $members, $rows) {
             if ($group === 'branch') {
-                fputcsv($out, ['Branch', 'Members', 'Present', 'Late', 'Half day', 'Absent', 'Leave', 'Incomplete', 'Hours worked', 'Attendance rate %']);
+                fputcsv($out, ['Branch', 'Members', 'Present', 'Late', 'Half day', 'Absent', 'Leave', 'Day off', 'Incomplete', 'Hours worked', 'Attendance rate %']);
                 foreach ($this->byBranch($members) as $b) {
                     fputcsv($out, $this->safe([
                         $b['branch_name'], $b['member_count'], $b['present'], $b['late'], $b['half_day'],
-                        $b['absent'], $b['leave'], $b['incomplete'], $b['hours_worked'], $b['attendance_rate'],
+                        $b['absent'], $b['leave'], $b['day_off'], $b['incomplete'], $b['hours_worked'], $b['attendance_rate'],
                     ]));
                 }
                 return;
             }
 
             if ($group === 'daily') {
-                fputcsv($out, ['Date', 'Member', 'Branch', 'Status', 'Clock in', 'Clock out', 'Hours', 'Incomplete']);
+                fputcsv($out, ['Date', 'Member', 'Branch', 'Status', 'Note', 'Clock in', 'Clock out', 'Hours', 'Incomplete']);
                 foreach ($rows as $r) {
                     foreach ($r['days'] as $day) {
                         if (in_array($day['status'], ['closed', 'unscheduled', 'upcoming'], true)) {
                             continue;
                         }
                         fputcsv($out, $this->safe([
-                            $day['date'], $r['name'], $r['branch_name'], $day['status'],
+                            $day['date'], $r['name'], $r['branch_name'], $day['status'], $day['note'],
                             $day['clock_in'], $day['clock_out'], $day['hours'], $day['incomplete'] ? 'yes' : '',
                         ]));
                     }
@@ -130,11 +132,11 @@ class ReportsController extends Controller
                 return;
             }
 
-            fputcsv($out, ['Member', 'Branch', 'Present', 'Late', 'Half day', 'Absent', 'Leave', 'Incomplete', 'Hours worked', 'Attendance rate %']);
+            fputcsv($out, ['Member', 'Branch', 'Present', 'Late', 'Half day', 'Absent', 'Leave', 'Day off', 'Incomplete', 'Hours worked', 'Attendance rate %']);
             foreach ($members as $m) {
                 fputcsv($out, $this->safe([
                     $m['name'], $m['branch_name'], $m['present'], $m['late'], $m['half_day'],
-                    $m['absent'], $m['leave'], $m['incomplete'], $m['hours_worked'], $m['attendance_rate'],
+                    $m['absent'], $m['leave'], $m['day_off'], $m['incomplete'], $m['hours_worked'], $m['attendance_rate'],
                 ]));
             }
         });
@@ -224,7 +226,9 @@ class ReportsController extends Controller
             ->get()
             ->groupBy('member_id');
 
-        return $members->map(function (Member $member) use ($from, $to, $attendanceByMember, $leaves) {
+        $dayOffs = DayOff::loadFor($from, $to);
+
+        return $members->map(function (Member $member) use ($from, $to, $attendanceByMember, $leaves, $dayOffs) {
             $records = $attendanceByMember->get($member->id) ?? collect();
 
             $attendanceByDate = $records
@@ -247,7 +251,9 @@ class ReportsController extends Controller
                 }
             }
 
-            [$days, $counts] = $this->classifyDays($member, $from, $to, $attendanceByDate, $leaveDates);
+            $offDates = DayOff::expand($dayOffs, $member, $from, $to);
+
+            [$days, $counts] = $this->classifyDays($member, $from, $to, $attendanceByDate, $leaveDates, $offDates);
 
             return [
                 'member_id' => $member->id,
@@ -262,7 +268,7 @@ class ReportsController extends Controller
         });
     }
 
-    private function classifyDays(Member $member, Carbon $from, Carbon $to, Collection $attendanceByDate, array $leaveDates): array
+    private function classifyDays(Member $member, Carbon $from, Carbon $to, Collection $attendanceByDate, array $leaveDates, array $offDates = []): array
     {
         $branch = $member->branch;
         $scheduleRows = $branch ? $branch->scheduleDays->keyBy('day') : collect();
@@ -291,6 +297,7 @@ class ReportsController extends Controller
                 'clock_out' => null,
                 'hours' => null,
                 'incomplete' => false,
+                'note' => null,
             ];
 
             if ($attendance) {
@@ -310,6 +317,10 @@ class ReportsController extends Controller
                 }
             } elseif ($row && !$row->is_working) {
                 $entry['status'] = 'closed';
+            } elseif (isset($offDates[$d])) {
+                $entry['status'] = 'day_off';
+                $entry['note'] = $offDates[$d];
+                $counts['day_off']++;
             } elseif (isset($leaveDates[$d])) {
                 $entry['status'] = 'leave';
                 $counts['leave']++;

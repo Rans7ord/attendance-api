@@ -86,8 +86,10 @@ class LeaveController extends Controller
 
     /**
      * Requests an admin/supervisor can act on. ?status=pending (default),
-     * approved, rejected, cancelled, or all. A supervisor only ever sees
-     * plain members of their own branch, matching what they can approve.
+     * approved, rejected, cancelled, or all. What each role sees matches
+     * what it can approve: a supervisor sees plain members of their own
+     * branch, a manager sees members and supervisors company-wide, and an
+     * admin sees everything.
      */
     public function review(Request $request)
     {
@@ -106,6 +108,8 @@ class LeaveController extends Controller
                 $q->where('branch_id', $user->branchId())
                   ->whereHas('user', fn ($u) => $u->where('role', 'member'));
             });
+        } elseif ($user->isManager()) {
+            $query->whereHas('member.user', fn ($u) => $u->whereIn('role', ['member', 'supervisor']));
         }
 
         return $query->get();
@@ -144,6 +148,10 @@ class LeaveController extends Controller
             if (!$isPlainMemberOfMyBranch) {
                 return response()->json(['message' => 'Not found.'], 404);
             }
+        }
+
+        if ($reviewer->isManager() && !in_array($requesterUser?->role, ['member', 'supervisor'], true)) {
+            return response()->json(['message' => 'Only an admin can review this request.'], 403);
         }
 
         $leave->update([
@@ -210,15 +218,26 @@ class LeaveController extends Controller
     }
 
     /**
-     * Everyone who should hear about a leave request from this member:
-     * all admins, plus the supervisors of the member's branch when the
-     * requester is a plain member. The requester is never included.
+     * Everyone who should hear about a leave request from this member, and
+     * who can act on it:
+     *   - all admins (always)
+     *   - all managers, when the requester is a member or supervisor
+     *   - the supervisors of the member's branch, when the requester is a
+     *     plain member
+     * The requester is never included, and deactivated accounts are skipped.
      */
     private function approversFor(Member $member, User $requester): Collection
     {
         $admins = User::whereIn('role', ['admin', 'super_admin'])
             ->where('id', '!=', $requester->id)
             ->get();
+
+        $managers = collect();
+        if (in_array($requester->role, ['member', 'supervisor'], true)) {
+            $managers = User::where('role', 'manager')
+                ->where('id', '!=', $requester->id)
+                ->get();
+        }
 
         $supervisors = collect();
         if ($requester->role === 'member' && $member->branch_id) {
@@ -227,7 +246,10 @@ class LeaveController extends Controller
                 ->get();
         }
 
-        return $admins->merge($supervisors)->unique('id')->values();
+        return $admins->merge($managers)->merge($supervisors)
+            ->unique('id')
+            ->filter(fn (User $u) => $u->isActive())
+            ->values();
     }
 
     private function describe(LeaveRequest $leave): string

@@ -38,6 +38,15 @@ class User extends Authenticatable
     }
 
     /**
+     * False once an admin has set this person's member record to inactive.
+     * A user with no member record (e.g. a fresh company admin) is active.
+     */
+    public function isActive(): bool
+    {
+        return $this->member?->status !== 'inactive';
+    }
+
+    /**
      * True for admin and super_admin — company-wide access.
      */
     public function isAdmin(): bool

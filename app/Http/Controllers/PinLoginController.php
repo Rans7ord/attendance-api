@@ -61,6 +61,12 @@ class PinLoginController extends Controller
 
         RateLimiter::clear($rateLimitKey);
 
+        if (!$user->isActive()) {
+            throw ValidationException::withMessages([
+                'pin' => ['This account has been deactivated. Contact your admin.'],
+            ]);
+        }
+
         $token = $user->createToken('mobile-pin-login')->plainTextToken;
 
         return response()->json([

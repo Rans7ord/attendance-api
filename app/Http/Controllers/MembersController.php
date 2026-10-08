@@ -80,9 +80,21 @@ class MembersController extends Controller
             return response()->json(['message' => $error], 422);
         }
 
+        $deactivating = $request->input('status') === 'inactive' && $member->status !== 'inactive';
+
+        if ($deactivating && $member->user_id === $request->user()->id) {
+            return response()->json(['message' => 'You cannot deactivate your own account.'], 422);
+        }
+
         $member->update($request->only([
             'first_name', 'last_name', 'phone', 'email', 'position', 'branch_id', 'shift_id', 'status',
         ]));
+
+        // Sign the person out everywhere the moment they are deactivated.
+        // (The 'active' middleware also blocks any token that slips through.)
+        if ($deactivating) {
+            $member->user?->tokens()->delete();
+        }
 
         return response()->json($member);
     }

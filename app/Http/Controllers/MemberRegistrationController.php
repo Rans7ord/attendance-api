@@ -29,7 +29,7 @@ class MemberRegistrationController extends Controller
             'email' => 'required|email|unique:users,email',
             'password' => 'required|string|min:8',
             'phone' => 'nullable|string|max:50',
-            'branch_id' => 'nullable|integer',
+            'branch_id' => 'required|integer',
             'attendance_pin' => ['required', 'regex:/^\d{4}$/'],
         ]);
 

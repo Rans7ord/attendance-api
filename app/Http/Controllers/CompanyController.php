@@ -65,9 +65,17 @@ class CompanyController extends Controller
      */
     public function show(Request $request)
     {
-        return $request->user()->company->only([
+        $company = $request->user()->company;
+        $hasBranch = $company->branches()->exists();
+
+        return array_merge($company->only([
             'id', 'name', 'join_code', 'join_code_expires_at',
             'join_code_max_uses', 'join_code_uses_count', 'require_selfie_on_join',
+        ]), [
+            // A join code is only usable once there is a branch to put
+            // new members in, so don't hand it out before then.
+            'join_code' => $hasBranch ? $company->join_code : null,
+            'needs_branch' => !$hasBranch,
         ]);
     }
 
@@ -102,6 +110,10 @@ class CompanyController extends Controller
         }
 
         $branches = $company->branches()->get(['id', 'name']);
+
+        if ($branches->isEmpty()) {
+            return response()->json(['message' => 'This company is not accepting registrations yet.'], 404);
+        }
 
         return response()->json([
             'company_name' => $company->name,
@@ -140,6 +152,12 @@ class CompanyController extends Controller
         ]);
 
         $company = $request->user()->company;
+
+        if (!$company->branches()->exists()) {
+            return response()->json([
+                'message' => 'Add at least one branch before generating a join code.',
+            ], 422);
+        }
 
         $company->update([
             'join_code' => Company::generateUniqueJoinCode(),

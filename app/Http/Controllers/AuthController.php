@@ -18,6 +18,10 @@ class AuthController extends Controller
             throw ValidationException::withMessages(['email' => ['Invalid credentials.']]);
         }
 
+        if (!$user->isActive()) {
+            throw ValidationException::withMessages(['email' => ['This account has been deactivated. Contact your admin.']]);
+        }
+
         $token = $user->createToken('mobile')->plainTextToken;
 
         return response()->json([

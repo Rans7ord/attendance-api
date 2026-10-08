@@ -9,11 +9,21 @@ use Illuminate\Http\Request;
 
 class AttendanceController extends Controller
 {
+    private function noMemberResponse()
+    {
+        return response()->json([
+            'message' => 'Your account has no member profile yet. Ask an admin to set one up.',
+        ], 422);
+    }
+
     public function clockIn(Request $request)
     {
         $request->validate(['gps_lat' => 'required|numeric', 'gps_lng' => 'required|numeric']);
 
         $member = $request->user()->member;
+        if (!$member) {
+            return $this->noMemberResponse();
+        }
 
         $open = Attendance::where('member_id', $member->id)->whereNull('clock_out')->latest()->first();
         if ($open) {
@@ -24,6 +34,15 @@ class AttendanceController extends Controller
         }
 
         $branch = $member->branch;
+
+        // Without a branch there is no geofence or schedule to check, which
+        // would let the person clock in from anywhere at any time.
+        if (!$branch) {
+            $this->logAttempt($member, 'clock_in', 'rejected', 'no_branch', null, $request->gps_lat, $request->gps_lng);
+            return response()->json([
+                'message' => 'You are not assigned to a branch yet. Ask an admin to assign you one before clocking in.',
+            ], 422);
+        }
 
         $geofence = $this->checkGeofence($member, $request->gps_lat, $request->gps_lng);
 
@@ -60,6 +79,9 @@ class AttendanceController extends Controller
         $request->validate(['gps_lat' => 'required|numeric', 'gps_lng' => 'required|numeric']);
 
         $member = $request->user()->member;
+        if (!$member) {
+            return $this->noMemberResponse();
+        }
         $check = $this->checkGeofence($member, $request->gps_lat, $request->gps_lng);
 
         $this->logAttempt(
@@ -112,6 +134,9 @@ class AttendanceController extends Controller
     public function status(Request $request)
     {
         $member = $request->user()->member;
+        if (!$member) {
+            return $this->noMemberResponse();
+        }
 
         $open = Attendance::where('member_id', $member->id)->whereNull('clock_out')->latest()->first();
 
@@ -130,6 +155,10 @@ class AttendanceController extends Controller
     public function history(Request $request)
     {
         $member = $request->user()->member;
+
+        if (!$member) {
+            return response()->json([]);
+        }
 
         $records = Attendance::where('member_id', $member->id)
             ->orderByDesc('clock_in')
@@ -198,6 +227,9 @@ class AttendanceController extends Controller
     public function myCalendar(Request $request)
     {
         $member = $request->user()->member;
+        if (!$member) {
+            return $this->noMemberResponse();
+        }
         return $this->buildCalendar($member, $request->query('month'));
     }
 

@@ -27,7 +27,7 @@ Route::middleware('throttle:10,1')->group(function () {
     Route::get('/invites/{token}/registration', [CompanyController::class, 'inviteRegistrationDetails']);
 });
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'active'])->group(function () {
     Route::post('/clock-in', [AttendanceController::class, 'clockIn']);
     Route::post('/clock-out', [AttendanceController::class, 'clockOut']);
     Route::get('/attendance', [AttendanceController::class, 'history']);
@@ -44,7 +44,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
 });
 
-Route::middleware(['auth:sanctum', 'staff'])->group(function () {
+Route::middleware(['auth:sanctum', 'active', 'staff'])->group(function () {
     Route::get('/members', [MembersController::class, 'index']);
     Route::get('/members/{member}', [MembersController::class, 'show']);
     Route::get('/members/{member}/attendance', [AttendanceController::class, 'memberHistory']);
@@ -59,7 +59,7 @@ Route::middleware(['auth:sanctum', 'staff'])->group(function () {
     Route::post('/leave/{leaveRequest}/reject', [LeaveController::class, 'reject']);
 });
 
-Route::middleware(['auth:sanctum', 'admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'active', 'admin'])->group(function () {
     Route::post('/members', [MembersController::class, 'store']);
     Route::post('/members/bulk-import', [MembersController::class, 'bulkImport']);
     Route::put('/members/{member}', [MembersController::class, 'update']);

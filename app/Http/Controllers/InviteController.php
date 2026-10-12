@@ -2,22 +2,24 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\InviteMail;
 use App\Models\Branch;
 use App\Models\Invite;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class InviteController extends Controller
 {
     private const ROLES = ['member', 'supervisor', 'manager', 'admin'];
 
     /**
-     * Admin-only: create a one-time invite for a specific email address.
-     * Doesn't send anything itself — email delivery needs SMTP credentials
-     * configured in .env first (config/mail.php is still on the default
-     * "log" driver). Until that's set up, the admin copies the returned
-     * link and sends it however they already communicate with people
-     * (email, WhatsApp, text). Wiring up actual sending is a small follow-up
-     * once you've picked a mail provider.
+     * Admin-only: create a one-time invite for a specific email address
+     * and email it to that address (needs SMTP set up in .env — with the
+     * default "log" mailer the email is only written to the log file).
+     *
+     * The token is still returned in the response so the admin can share
+     * it by hand (WhatsApp, text) if the email doesn't arrive.
      */
     public function store(Request $request)
     {
@@ -66,11 +68,14 @@ class InviteController extends Controller
             'expires_at' => now()->addDays($request->input('expires_in_days', 7)),
         ]);
 
+        $emailed = $this->sendInviteEmail($invite, $company->name);
+
         return response()->json([
             'invite' => $invite,
-            // Frontend (web admin / Flutter) should build the real deep
-            // link around this token, e.g. ontimeapp://accept-invite/{token}
             'token' => $invite->token,
+            // false means the mail server refused it (see storage/logs) —
+            // the app can tell the admin to share the token manually.
+            'emailed' => $emailed,
         ], 201);
     }
 
@@ -92,5 +97,23 @@ class InviteController extends Controller
         $invite->delete();
 
         return response()->json(['message' => 'Invite revoked.']);
+    }
+
+    /**
+     * A mail-server problem must not stop the invite from being created,
+     * so failures are logged and reported as emailed=false instead of
+     * turning into a 500.
+     */
+    private function sendInviteEmail(Invite $invite, string $companyName): bool
+    {
+        try {
+            Mail::to($invite->email)->send(new InviteMail($invite, $companyName));
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::error('Invite email failed: ' . $e->getMessage());
+
+            return false;
+        }
     }
 }
